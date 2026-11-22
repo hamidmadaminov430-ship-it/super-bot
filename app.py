@@ -6,7 +6,6 @@ from telebot import types
 from flask import Flask
 from gradio_client import Client, handle_file
 
-# --- 1. SOZLAMALAR VA TOKENLAR ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -17,7 +16,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 user_modes = {}
 
-# --- 2. 24/7 SERVER UCHUN FLASK ---
 @app.route('/')
 def home():
     return "Super AI Bot 24/7 ishlayapti!"
@@ -26,7 +24,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
 
-# --- 3. TUGMALAR MENYUSI ---
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
@@ -47,7 +44,6 @@ def send_welcome(message):
         reply_markup=main_menu()
     )
 
-# --- 4. REJIMLAR ---
 @bot.message_handler(func=lambda msg: msg.text in ["🤖 AI Suhbat", "🇬🇧 Tarjimon (UZ <-> EN)", "🎬 Rasmni jonlantirish"])
 def switch_mode(message):
     chat_id = message.chat.id
@@ -61,10 +57,8 @@ def switch_mode(message):
         user_modes[chat_id] = 'animate'
         bot.send_message(chat_id, "🎬 **Rasm jonlantirish rejimi.** Rasm yuboring va tagiga harakatni yozing:", parse_mode="Markdown")
 
-# --- 5. TEZKOR BEPUL AI (GROQ + GEMINI + ZAXIRA) ---
 def ask_ai(prompt):
     err_log = []
-    # 1. Groq API
     if GROQ_API_KEY:
         try:
             res = requests.post(
@@ -74,38 +68,41 @@ def ask_ai(prompt):
                 timeout=20
             )
             if res.status_code == 200:
-                choices = res.json().get("choices", [])
-                if choices:
-                    return choices[0]["message"]["content"]
-            err_log.append(f"Groq {res.status_code}")
+                first_choice = next(iter(res.json().get("choices", [])), None)
+                if first_choice:
+                    return first_choice.get("message", {}).get("content", "")
+            err_log.append(f"Groq {res.status_code}: {res.text[:60]}")
         except Exception as e:
-            err_log.append(f"Groq err: {str(e)[:50]}")
+            err_log.append(f"Groq: {str(e)[:50]}")
 
-    # 2. Gemini API
     if GEMINI_API_KEY:
         try:
             url = f"https://googleapis.com{GEMINI_API_KEY.strip()}"
             res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=20)
             if res.status_code == 200:
-                candidates = res.json().get("candidates", [])
-                if candidates:
-                    return candidates[0]["content"]["parts"][0]["text"]
+                cand = next(iter(res.json().get("candidates", [])), None)
+                if cand:
+                    part = next(iter(cand.get("content", {}).get("parts", [])), None)
+                    if part:
+                        return part.get("text", "")
             err_log.append(f"Gemini {res.status_code}")
         except Exception as e:
-            err_log.append(f"Gemini err: {str(e)[:50]}")
+            err_log.append(f"Gemini: {str(e)[:50]}")
 
-    # 3. Pollinations zaxira
     try:
-        res = requests.get(f"https://pollinations.ai{requests.utils.quote(prompt)}", timeout=20)
+        res = requests.post(
+            "https://pollinations.ai",
+            json={"messages": [{"role": "user", "content": prompt}], "model": "openai"},
+            timeout=20
+        )
         if res.status_code == 200 and res.text.strip():
             return res.text.strip()
         err_log.append(f"Poll {res.status_code}")
     except Exception as e:
-        err_log.append(f"Poll err: {str(e)[:50]}")
+        err_log.append(f"Poll: {str(e)[:50]}")
 
-    return "⚠️ AI javob bera olmadi.\nSabab: " + (" | ".join(err_log) if err_log else "Kalit kiritilmagan")
+    return "⚠️ AI javob bera olmadi.\nSabab: " + (" | ".join(err_log) if err_log else "Kalit topilmadi")
 
-# --- 6. RASM JONLANTIRISH ---
 VIDEO_SPACES = [
     ("Wan-AI/Wan2.1", "/predict"),
     ("Lightricks/LTX-Video", "/image_to_video"),
@@ -115,7 +112,6 @@ VIDEO_SPACES = [
 def animate_image_safe(image_path, prompt_text):
     last_error = "Tokenlar kiritilmagan"
     tokens_to_try = HF_TOKEN_LIST if HF_TOKEN_LIST else [None]
-    
     for tok in tokens_to_try:
         for space_id, endpoint in VIDEO_SPACES:
             try:
@@ -123,13 +119,9 @@ def animate_image_safe(image_path, prompt_text):
                 if "stable-video-diffusion" in space_id:
                     result = client.predict(image=handle_file(image_path), api_name=endpoint)
                 else:
-                    result = client.predict(
-                        image=handle_file(image_path),
-                        prompt=prompt_text,
-                        api_name=endpoint
-                    )
+                    result = client.predict(image=handle_file(image_path), prompt=prompt_text, api_name=endpoint)
                 if isinstance(result, (list, tuple)):
-                    return result[0], None
+                    return next(iter(result), None), None
                 elif isinstance(result, dict) and 'video' in result:
                     return result['video'], None
                 return result, None
@@ -143,37 +135,29 @@ def handle_photo(message):
     chat_id = message.chat.id
     caption = message.caption if message.caption else "Animate this image naturally, smooth motion"
     wait_msg = bot.reply_to(message, "⏳ Rasm qabul qilindi. Jonlantirilmoqda, 30-60 soniya kuting...")
-    
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         temp_img = f"temp_{chat_id}.jpg"
         with open(temp_img, 'wb') as f:
             f.write(downloaded_file)
-            
         video_path, error = animate_image_safe(temp_img, caption)
-        
         if video_path and os.path.exists(str(video_path)):
             with open(video_path, 'rb') as video:
                 bot.send_video(chat_id, video, caption=f"🎬 Tayyor: Rasm jonlantirildi!\n📝 Izoh: {caption}")
             bot.delete_message(chat_id, wait_msg.message_id)
         else:
-            bot.edit_message_text(
-                f"❌ Barcha GPU tokenlar/serverlar band yoki limit tugagan.\n\nXato: {error[:200]}",
-                chat_id, wait_msg.message_id
-            )
+            bot.edit_message_text(f"❌ GPU limit tugagan yoki band.\n\nXato: {error[:180]}", chat_id, wait_msg.message_id)
         if os.path.exists(temp_img):
             os.remove(temp_img)
     except Exception as e:
         bot.edit_message_text(f"❌ Xatolik: {str(e)}", chat_id, wait_msg.message_id)
 
-# --- 7. MATNLI XABARLAR ---
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     chat_id = message.chat.id
     mode = user_modes.get(chat_id, 'chat')
     bot.send_chat_action(chat_id, 'typing')
-    
     if mode == 'translate':
         prompt = f"Translate accurately between Uzbek and English. Only return the translation:\n\n{message.text}"
         reply = ask_ai(prompt)
