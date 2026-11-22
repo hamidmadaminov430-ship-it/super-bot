@@ -35,6 +35,7 @@ def main_menu():
     return markup
 
 @bot.message_handler(commands=['start'])
+@bot.message_handler(func=lambda msg: msg.text and msg.text.lower().strip() == 'start')
 def send_welcome(message):
     user_modes[message.chat.id] = 'chat'
     bot.send_message(
@@ -61,48 +62,55 @@ def switch_mode(message):
 # --- 5. BEPUL MATNLI AI ---
 def ask_free_ai(prompt):
     try:
-        url = f"https://pollinations.ai{requests.utils.quote(prompt)}"
-        res = requests.get(url, timeout=30)
-        if res.status_code == 200:
-            return res.text
-        return "⚠️ AI serverida vaqtinchalik uzilish."
+        res = requests.post(
+            "https://pollinations.ai",
+            json={"messages": [{"role": "user", "content": prompt}], "model": "openai"},
+            timeout=30
+        )
+        if res.status_code == 200 and res.text.strip():
+            return res.text.strip()
+        return "⚠️ AI serverida vaqtinchalik uzilish. Qayta urinib ko'ring."
     except Exception as e:
         return f"⚠️ Xatolik: {str(e)}"
 
-# --- 6. RASM JONLANTIRISH (KO'P TOKEN + ZAXIRA SPACE) ---
+# --- 6. RASM JONLANTIRISH (YANGI GRADIO CLIENT BILAN) ---
 VIDEO_SPACES = [
-    "Wan-AI/Wan2.1",
-    "Lightricks/LTX-Video",
-    "ByteDance/AnimateDiff-Lightning"
+    ("Wan-AI/Wan2.1", "/predict"),
+    ("Lightricks/LTX-Video", "/image_to_video"),
+    ("multimodalart/stable-video-diffusion", "/video")
 ]
 
 def animate_image_safe(image_path, prompt_text):
     last_error = "Tokenlar kiritilmagan"
     tokens_to_try = HF_TOKEN_LIST if HF_TOKEN_LIST else [None]
     
-    for token in tokens_to_try:
-        for space_id in VIDEO_SPACES:
+    for tok in tokens_to_try:
+        for space_id, endpoint in VIDEO_SPACES:
             try:
-                client = Client(space_id, hf_token=token)
-                result = client.predict(
-                    image=handle_file(image_path),
-                    prompt=prompt_text,
-                    api_name="/predict"
-                )
+                # Yangi gradio_client uchun 'token=' ishlatiladi
+                client = Client(space_id, token=tok)
+                if "stable-video-diffusion" in space_id:
+                    result = client.predict(image=handle_file(image_path), api_name=endpoint)
+                else:
+                    result = client.predict(
+                        image=handle_file(image_path),
+                        prompt=prompt_text,
+                        api_name=endpoint
+                    )
                 if isinstance(result, (list, tuple)):
                     return result, None
                 elif isinstance(result, dict) and 'video' in result:
                     return result['video'], None
                 return result, None
             except Exception as e:
-                last_error = str(e)
+                last_error = f"{space_id}: {str(e)}"
                 continue
     return None, last_error
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     chat_id = message.chat.id
-    caption = message.caption if message.caption else "Animate this image naturally, keep face clear"
+    caption = message.caption if message.caption else "Animate this image naturally, smooth motion"
     wait_msg = bot.reply_to(message, "⏳ Rasm qabul qilindi. Jonlantirilmoqda, 30-60 soniya kuting...")
     
     try:
@@ -120,7 +128,7 @@ def handle_photo(message):
             bot.delete_message(chat_id, wait_msg.message_id)
         else:
             bot.edit_message_text(
-                f"❌ Barcha GPU tokenlar/serverlar band yoki limit tugagan.\n\nXato: {error[:150]}",
+                f"❌ Barcha GPU tokenlar/serverlar band yoki limit tugagan.\n\nXato: {error[:200]}",
                 chat_id, wait_msg.message_id
             )
         if os.path.exists(temp_img):
@@ -147,4 +155,4 @@ def handle_text(message):
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
-                  
+    
