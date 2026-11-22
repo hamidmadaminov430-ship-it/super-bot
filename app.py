@@ -8,6 +8,7 @@ from gradio_client import Client, handle_file
 
 # --- 1. SOZLAMALAR VA TOKENLAR ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 raw_tokens = os.environ.get("HF_TOKENS", "")
 HF_TOKEN_LIST = [t.strip() for t in raw_tokens.split(",") if t.strip()]
@@ -60,33 +61,49 @@ def switch_mode(message):
         user_modes[chat_id] = 'animate'
         bot.send_message(chat_id, "🎬 **Rasm jonlantirish rejimi.** Rasm yuboring va tagiga harakatni yozing:", parse_mode="Markdown")
 
-# --- 5. KUCHLI AI JAVOB TIZIMI (GEMINI + ZAXIRA) ---
+# --- 5. TEZKOR BEPUL AI (GROQ + GEMINI + ZAXIRA) ---
 def ask_ai(prompt):
-    gemini_err = ""
-    if GEMINI_API_KEY:
-        for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
-            try:
-                url = f"https://googleapis.com{model_name}:generateContent?key={GEMINI_API_KEY.strip()}"
-                payload = {"contents": [{"parts": [{"text": prompt}]}]}
-                res = requests.post(url, json=payload, timeout=25)
-                if res.status_code == 200:
-                    data = res.json()
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
-                else:
-                    gemini_err = f"Status {res.status_code}: {res.text[:100]}"
-            except Exception as e:
-                gemini_err = str(e)
+    err_log = []
+    # 1. Groq API
+    if GROQ_API_KEY:
+        try:
+            res = requests.post(
+                "https://groq.com",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY.strip()}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}]},
+                timeout=20
+            )
+            if res.status_code == 200:
+                choices = res.json().get("choices", [])
+                if choices:
+                    return choices[0]["message"]["content"]
+            err_log.append(f"Groq {res.status_code}")
+        except Exception as e:
+            err_log.append(f"Groq err: {str(e)[:50]}")
 
-    # Zaxira Pollinations GET usuli
+    # 2. Gemini API
+    if GEMINI_API_KEY:
+        try:
+            url = f"https://googleapis.com{GEMINI_API_KEY.strip()}"
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=20)
+            if res.status_code == 200:
+                candidates = res.json().get("candidates", [])
+                if candidates:
+                    return candidates[0]["content"]["parts"][0]["text"]
+            err_log.append(f"Gemini {res.status_code}")
+        except Exception as e:
+            err_log.append(f"Gemini err: {str(e)[:50]}")
+
+    # 3. Pollinations zaxira
     try:
-        encoded = requests.utils.quote(prompt)
-        res = requests.get(f"https://pollinations.ai{encoded}", timeout=25)
+        res = requests.get(f"https://pollinations.ai{requests.utils.quote(prompt)}", timeout=20)
         if res.status_code == 200 and res.text.strip():
             return res.text.strip()
-    except Exception:
-        pass
+        err_log.append(f"Poll {res.status_code}")
+    except Exception as e:
+        err_log.append(f"Poll err: {str(e)[:50]}")
 
-    return f"⚠️ AI javob bera olmadi.\nSabab: {gemini_err}"
+    return "⚠️ AI javob bera olmadi.\nSabab: " + (" | ".join(err_log) if err_log else "Kalit kiritilmagan")
 
 # --- 6. RASM JONLANTIRISH ---
 VIDEO_SPACES = [
