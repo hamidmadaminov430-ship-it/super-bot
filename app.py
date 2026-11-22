@@ -62,19 +62,22 @@ def switch_mode(message):
 
 # --- 5. KUCHLI AI JAVOB TIZIMI (GEMINI + ZAXIRA) ---
 def ask_ai(prompt):
-    # 1-urinish: Google Gemini API (Tez va aniq)
+    gemini_err = ""
     if GEMINI_API_KEY:
-        try:
-            url = f"https://googleapis.com{GEMINI_API_KEY}"
-            payload = {"contents": [{"parts": [{"text": prompt}]}]}
-            res = requests.post(url, json=payload, timeout=25)
-            if res.status_code == 200:
-                data = res.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
-            pass
+        for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            try:
+                url = f"https://googleapis.com{model_name}:generateContent?key={GEMINI_API_KEY.strip()}"
+                payload = {"contents": [{"parts": [{"text": prompt}]}]}
+                res = requests.post(url, json=payload, timeout=25)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    gemini_err = f"Status {res.status_code}: {res.text[:100]}"
+            except Exception as e:
+                gemini_err = str(e)
 
-    # 2-urinish: Zaxira Pollinations GET usuli
+    # Zaxira Pollinations GET usuli
     try:
         encoded = requests.utils.quote(prompt)
         res = requests.get(f"https://pollinations.ai{encoded}", timeout=25)
@@ -83,7 +86,7 @@ def ask_ai(prompt):
     except Exception:
         pass
 
-    return "⚠️ AI serverida vaqtinchalik uzilish. Birozdan so'ng qayta urinib ko'ring."
+    return f"⚠️ AI javob bera olmadi.\nSabab: {gemini_err}"
 
 # --- 6. RASM JONLANTIRISH ---
 VIDEO_SPACES = [
@@ -109,7 +112,7 @@ def animate_image_safe(image_path, prompt_text):
                         api_name=endpoint
                     )
                 if isinstance(result, (list, tuple)):
-                    return result, None
+                    return result[0], None
                 elif isinstance(result, dict) and 'video' in result:
                     return result['video'], None
                 return result, None
