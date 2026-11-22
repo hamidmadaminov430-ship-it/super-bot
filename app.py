@@ -6,8 +6,9 @@ from telebot import types
 from flask import Flask
 from gradio_client import Client, handle_file
 
-# --- 1. SOZLAMALAR VA KO'P TOKENLAR ---
+# --- 1. SOZLAMALAR VA TOKENLAR ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 raw_tokens = os.environ.get("HF_TOKENS", "")
 HF_TOKEN_LIST = [t.strip() for t in raw_tokens.split(",") if t.strip()]
 
@@ -59,21 +60,32 @@ def switch_mode(message):
         user_modes[chat_id] = 'animate'
         bot.send_message(chat_id, "🎬 **Rasm jonlantirish rejimi.** Rasm yuboring va tagiga harakatni yozing:", parse_mode="Markdown")
 
-# --- 5. BEPUL MATNLI AI ---
-def ask_free_ai(prompt):
+# --- 5. KUCHLI AI JAVOB TIZIMI (GEMINI + ZAXIRA) ---
+def ask_ai(prompt):
+    # 1-urinish: Google Gemini API (Tez va aniq)
+    if GEMINI_API_KEY:
+        try:
+            url = f"https://googleapis.com{GEMINI_API_KEY}"
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            res = requests.post(url, json=payload, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            pass
+
+    # 2-urinish: Zaxira Pollinations GET usuli
     try:
-        res = requests.post(
-            "https://pollinations.ai",
-            json={"messages": [{"role": "user", "content": prompt}], "model": "openai"},
-            timeout=30
-        )
+        encoded = requests.utils.quote(prompt)
+        res = requests.get(f"https://pollinations.ai{encoded}", timeout=25)
         if res.status_code == 200 and res.text.strip():
             return res.text.strip()
-        return "⚠️ AI serverida vaqtinchalik uzilish. Qayta urinib ko'ring."
-    except Exception as e:
-        return f"⚠️ Xatolik: {str(e)}"
+    except Exception:
+        pass
 
-# --- 6. RASM JONLANTIRISH (YANGI GRADIO CLIENT BILAN) ---
+    return "⚠️ AI serverida vaqtinchalik uzilish. Birozdan so'ng qayta urinib ko'ring."
+
+# --- 6. RASM JONLANTIRISH ---
 VIDEO_SPACES = [
     ("Wan-AI/Wan2.1", "/predict"),
     ("Lightricks/LTX-Video", "/image_to_video"),
@@ -87,7 +99,6 @@ def animate_image_safe(image_path, prompt_text):
     for tok in tokens_to_try:
         for space_id, endpoint in VIDEO_SPACES:
             try:
-                # Yangi gradio_client uchun 'token=' ishlatiladi
                 client = Client(space_id, token=tok)
                 if "stable-video-diffusion" in space_id:
                     result = client.predict(image=handle_file(image_path), api_name=endpoint)
@@ -145,11 +156,11 @@ def handle_text(message):
     
     if mode == 'translate':
         prompt = f"Translate accurately between Uzbek and English. Only return the translation:\n\n{message.text}"
-        reply = ask_free_ai(prompt)
+        reply = ask_ai(prompt)
         bot.reply_to(message, f"🇬🇧 **Tarjima:**\n\n{reply}", parse_mode="Markdown")
     else:
         prompt = f"Answer clearly and helpfully in Uzbek language:\n\n{message.text}"
-        reply = ask_free_ai(prompt)
+        reply = ask_ai(prompt)
         bot.reply_to(message, reply)
 
 if __name__ == "__main__":
